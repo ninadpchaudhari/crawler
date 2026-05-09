@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>State-Event Flow Graph — DM vs NL Reachability</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:#0f1117;color:#e0e0e0}
+
+/* Nav */
+.view-nav{display:flex;justify-content:center;gap:8px;padding:10px;background:#161822;border-bottom:1px solid #2a2d3e}
+.view-nav button{background:#1a1d2e;color:#ccc;border:1px solid #2a2d3e;border-radius:6px;padding:7px 18px;font-size:12px;cursor:pointer}
+.view-nav button.active{background:#58a6ff;color:#fff;border-color:#58a6ff}
+.view-nav button:hover:not(.active){background:#222640}
+.section{display:none}.section.active{display:block}
+
+/* Header */
+.header{text-align:center;padding:16px 16px 4px}
+.header h1{font-size:18px;font-weight:600;color:#fff}
+.header .sub{font-size:11px;color:#888;margin-top:2px}
+
+/* Summary */
+.summary-bar{display:flex;justify-content:center;gap:10px;padding:12px 16px;flex-wrap:wrap}
+.mc{background:#1a1d2e;border:1px solid #2a2d3e;border-radius:8px;padding:8px 16px;text-align:center;min-width:110px}
+.mc .v{font-size:22px;font-weight:700}.mc .l{font-size:9px;color:#888;text-transform:uppercase;letter-spacing:.4px;margin-top:1px}
+.dm-c{color:#58a6ff}.nl-c{color:#f78166}.sh-c{color:#7ee787}.vio-c{color:#f85149}
+
+/* Depth filter */
+.depth-controls{display:flex;justify-content:center;gap:12px;padding:6px 16px;align-items:center;flex-wrap:wrap}
+.depth-controls label{font-size:11px;color:#aaa}
+.depth-controls select,.depth-controls button{background:#1a1d2e;color:#ccc;border:1px solid #2a2d3e;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer}
+.depth-controls button:hover{background:#222640}
+.depth-controls .active-filter{background:#58a6ff;color:#fff;border-color:#58a6ff}
+
+/* Legend */
+.legend{display:flex;justify-content:center;gap:16px;padding:4px;font-size:10px;color:#888}
+.legend-item{display:flex;align-items:center;gap:4px}
+.ldot{width:10px;height:10px;border-radius:50%;border:2px solid}
+
+/* Graphs */
+.graphs-row{display:flex;padding:0 8px 8px}
+.graph-panel{flex:1;background:#161822;border:1px solid #2a2d3e;border-radius:10px;margin:0 4px;overflow:hidden;position:relative}
+.graph-panel h2{font-size:12px;font-weight:600;padding:8px 12px;border-bottom:1px solid #2a2d3e;display:flex;align-items:center;gap:6px}
+.graph-panel h2 .dot{width:8px;height:8px;border-radius:50%}
+.dm-dot{background:#58a6ff}.nl-dot{background:#f78166}
+.graph-panel .stats-badge{position:absolute;top:8px;right:12px;font-size:10px;color:#666}
+svg{display:block}
+.node circle{stroke-width:2;cursor:pointer}.node:hover circle{filter:brightness(1.3)}
+.node text{font-size:8px;font-family:'SF Mono','Fira Code',monospace;fill:#fff;pointer-events:none;text-anchor:middle;dominant-baseline:central}
+.node .pc{font-size:7px;fill:#aaa}
+.link{fill:none;stroke-width:1.2;opacity:.35}.link:hover{opacity:1;stroke-width:2}
+.link-label{font-size:6.5px;font-family:'SF Mono',monospace;fill:#555;pointer-events:none}
+
+/* Tooltip */
+.tooltip{position:fixed;background:#1e2030;border:1px solid #3a3d4e;border-radius:8px;padding:10px;font-size:10px;pointer-events:none;opacity:0;transition:opacity .1s;z-index:200;max-width:280px;box-shadow:0 6px 20px rgba(0,0,0,.5)}
+.tooltip.show{opacity:1}
+.tooltip .th{color:#58a6ff;font-family:monospace;font-size:9px}
+.tooltip .tc{margin-top:3px}.tooltip .tc span{display:inline-block;background:#2a2d3e;border-radius:3px;padding:0 4px;margin:1px;font-size:8px;font-family:monospace}
+.tooltip .tp{color:#aaa;font-size:9px;margin-top:3px;line-height:1.3}
+
+/* Modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:300;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .2s}
+.modal-overlay.show{opacity:1;pointer-events:auto}
+.modal-box{background:#1a1d2e;border:1px solid #3a3d4e;border-radius:12px;max-width:90vw;max-height:90vh;overflow:auto;padding:14px;box-shadow:0 12px 40px rgba(0,0,0,.6)}
+.modal-box .mh{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.modal-box .mh h3{font-size:13px;color:#fff}.modal-box .mh button{background:none;border:none;color:#888;font-size:20px;cursor:pointer;padding:0 4px}
+.modal-box .mh button:hover{color:#fff}
+.modal-box img{max-width:100%;border-radius:6px;border:1px solid #2a2d3e}
+.modal-box .si{margin-top:8px;font-size:10px;color:#aaa}
+.modal-box .si code{background:#2a2d3e;padding:1px 4px;border-radius:3px;font-size:9px}
+.modal-noss{color:#666;font-style:italic;font-size:12px;text-align:center;padding:30px}
+
+/* MR & chains */
+.mr-panel{margin:0 12px 10px;background:#1a1d2e;border:1px solid #3a2020;border-radius:8px;padding:10px 14px}
+.mr-panel h3{font-size:11px;color:#f85149;margin-bottom:4px}.mr-panel .md{font-size:10px;color:#ccc;line-height:1.5}
+.mr-panel code{background:#2a2d3e;padding:1px 4px;border-radius:3px;font-size:9px}
+
+.chain-panel{margin:0 12px 10px;background:#1a1d2e;border:1px solid #2a2d3e;border-radius:8px;padding:10px 14px}
+.chain-panel h3{font-size:12px;color:#f78166;margin-bottom:6px}
+.chain-card{border:1px solid #2a2d3e;border-radius:6px;margin-bottom:8px;overflow:hidden}
+.chain-card .cc-header{padding:6px 10px;background:#161822;font-size:11px;font-weight:600;display:flex;justify-content:space-between}
+.chain-card .cc-steps{padding:6px 10px;font-size:10px}
+.chain-step{display:flex;gap:8px;padding:3px 0;border-bottom:1px solid #1e2030}
+.chain-step .cs-num{color:#666;min-width:20px;font-family:monospace}.chain-step .cs-text{color:#ccc;flex:1}
+.chain-step .cs-hash{font-family:monospace;color:#58a6ff;font-size:9px}.chain-step .cs-fp{color:#f78166;font-size:9px}
+.chain-eq{padding:6px 10px;font-size:10px;border-top:1px solid #2a2d3e}
+.chain-eq.pass{background:#0d1f0d;color:#7ee787}.chain-eq.fail{background:#1f0d0d;color:#f85149}
+
+/* Footprints */
+.fp-section{margin:0 12px 14px}.fp-section h3{font-size:12px;margin-bottom:6px;color:#ccc}
+.fp-table{width:100%;border-collapse:collapse;font-size:10px}
+.fp-table th{text-align:left;padding:5px 8px;background:#1a1d2e;border-bottom:1px solid #2a2d3e;color:#888;font-size:9px;text-transform:uppercase}
+.fp-table td{padding:5px 8px;border-bottom:1px solid #1e2030}.fp-table tr:hover td{background:#1a1d2e}
+.fp-tag{display:inline-block;background:#2a2d3e;color:#f78166;border-radius:3px;padding:0 5px;margin:1px;font-family:monospace;font-size:9px}
+
+/* ═══ PRINT VIEW ═══ */
+#printView{background:#fff;color:#222;padding:28px 36px}
+#printView h1{font-size:16px;font-weight:700;color:#111;border-bottom:2px solid #111;padding-bottom:5px;margin-bottom:2px}
+#printView .ps{font-size:10px;color:#666;margin-bottom:16px}
+#printView .pg{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:20px}
+#printView .pm{border:1px solid #ddd;border-radius:5px;padding:8px;text-align:center}
+#printView .pm .pv{font-size:20px;font-weight:700}.pm .pl{font-size:8px;color:#888;text-transform:uppercase}
+#printView .pm .pv.dm{color:#2563eb}.pm .pv.nl{color:#dc6027}.pm .pv.sh{color:#16a34a}.pm .pv.fl{color:#dc2626}
+#printView h2{font-size:13px;font-weight:600;margin:16px 0 6px;color:#333;border-bottom:1px solid #ddd;padding-bottom:3px}
+#printView .pgr{display:flex;gap:12px;margin-bottom:16px}
+#printView .pgb{flex:1;border:1px solid #ccc;border-radius:6px;overflow:hidden}
+#printView .pgb h3{font-size:10px;padding:5px 8px;background:#f5f5f5;border-bottom:1px solid #ddd;color:#555}
+#printView .pgb svg{background:#fafafa}
+#printView table{width:100%;border-collapse:collapse;font-size:9px;margin-bottom:12px}
+#printView th{text-align:left;padding:4px 6px;background:#f5f5f5;border:1px solid #ddd;font-size:8px;text-transform:uppercase;color:#666}
+#printView td{padding:4px 6px;border:1px solid #eee}
+#printView .pt{background:#f0f0f0;border-radius:2px;padding:0 4px;font-family:monospace;font-size:8px;color:#c45a2e}
+#printView .pvi{background:#fef2f2;border:1px solid #fecaca;border-radius:5px;padding:8px 12px;margin-bottom:12px}
+#printView .pvi h3{color:#dc2626;font-size:11px;margin-bottom:3px}.pvi p{font-size:9px;color:#555;line-height:1.4}
+#printView code{background:#f0f0f0;padding:0 3px;border-radius:2px;font-size:8px}
+#printView .pch{border:1px solid #ddd;border-radius:5px;margin-bottom:10px;overflow:hidden}
+#printView .pch .pch-h{padding:5px 8px;background:#f5f5f5;border-bottom:1px solid #ddd;font-size:10px;font-weight:600;display:flex;justify-content:space-between}
+#printView .pch .pch-s{padding:4px 8px;font-size:9px}.pch-step{padding:2px 0;border-bottom:1px solid #f0f0f0}
+#printView .pch .pch-eq{padding:4px 8px;font-size:9px;border-top:1px solid #ddd}
+#printView .pch .pch-eq.pass{background:#f0fdf4}.pch-eq.fail{background:#fef2f2}
+#printView .sg{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px}
+#printView .sc{border:1px solid #ddd;border-radius:5px;overflow:hidden}
+#printView .sc img{width:100%;display:block}.sc .sci{padding:4px 6px;font-size:8px;background:#f9f9f9}
+.sc .sci .sch{font-family:monospace;color:#2563eb}
+
+/* Export area */
+.export-bar{display:flex;justify-content:center;gap:8px;padding:4px 16px 8px}
+.export-bar button{background:#1a1d2e;color:#aaa;border:1px solid #2a2d3e;border-radius:4px;padding:5px 14px;font-size:11px;cursor:pointer}
+.export-bar button:hover{background:#222640;color:#fff}
+
+@media print{
+  .view-nav,#interactiveView,.tooltip,.modal-overlay,.export-bar{display:none!important}
+  #printView{display:block!important;padding:12px}
+  body{background:#fff}@page{margin:.8cm;size:A4 landscape}
+  #printView .pgr{break-inside:avoid}#printView table{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+
+<div class="view-nav">
+  <button id="btnI" class="active" onclick="switchView('i')">Interactive</button>
+  <button id="btnP" onclick="switchView('p')">Print / Presentation</button>
+</div>
+
+<div id="interactiveView" class="section active">
+  <div class="header">
+    <h1>State-Event Flow Graph: DM vs NL Reachability</h1>
+    <div class="sub">Click nodes for screenshots. Use depth filter to slice large graphs. Drag to rearrange.</div>
+  </div>
+  <div class="summary-bar" id="summaryBar"></div>
+
+  <div class="depth-controls" id="depthControls">
+    <label>DM depth layer:</label>
+    <select id="dmDepthFrom"></select>
+    <span style="color:#555">→</span>
+    <select id="dmDepthTo"></select>
+    <button id="dmFilterBtn" onclick="applyDepthFilter()">Filter</button>
+    <button onclick="resetDepthFilter()">Show All</button>
+    <span id="filterStatus" style="font-size:10px;color:#7ee787;margin-left:8px"></span>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><div class="ldot" style="background:#1a1d2e;border-color:#58a6ff"></div>DM-only</div>
+    <div class="legend-item"><div class="ldot" style="background:#1a1d2e;border-color:#f78166"></div>NL-only</div>
+    <div class="legend-item"><div class="ldot" style="background:#7ee787;border-color:#7ee787"></div>Shared</div>
+    <div class="legend-item"><div class="ldot" style="background:#ffd700;border-color:#ffd700"></div>Baseline σ₀</div>
+  </div>
+
+  <div class="graphs-row">
+    <div class="graph-panel"><h2><span class="dot dm-dot"></span>Direct Manipulation (CrawlJax-style)</h2><span class="stats-badge" id="dmStats"></span><div id="dmGraph"></div></div>
+    <div class="graph-panel"><h2><span class="dot nl-dot"></span>Natural Language (Chat + Chains)</h2><span class="stats-badge" id="nlStats"></span><div id="nlGraph"></div></div>
+  </div>
+
+  <div class="export-bar">
+    <button onclick="downloadDot('dm')">Export DM .dot</button>
+    <button onclick="downloadDot('nl')">Export NL .dot</button>
+    <button onclick="downloadJson()">Export JSON</button>
+    <button onclick="exportSvg('dm')">Export DM SVG</button>
+    <button onclick="exportSvg('nl')">Export NL SVG</button>
+  </div>
+
+  <div id="mrPanel"></div>
+  <div id="chainPanel"></div>
+  <div class="fp-section" id="fpSection"></div>
+</div>
+
+<div id="printView" class="section"></div>
+<div class="modal-overlay" id="modalOverlay" onclick="closeModal(event)"><div class="modal-box" id="modalBox"></div></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+let R = null;
+let dmDepthMap = {}, nlDepthMap = {};
+let currentFilter = null; // {from, to}
+
+function switchView(v){
+  document.getElementById('interactiveView').classList.toggle('active',v==='i');
+  document.getElementById('printView').classList.toggle('active',v==='p');
+  document.getElementById('btnI').classList.toggle('active',v==='i');
+  document.getElementById('btnP').classList.toggle('active',v==='p');
+  if(v==='p'&&R) renderPrint(R);
+}
+
+async function loadReport(){
+  try{
+    const reportUrl=new URL('coverage_report.json',window.location.href).href;
+    console.log('Attempting to fetch from:',reportUrl);
+    const r=await fetch(reportUrl);
+    console.log('Fetch response status:',r.status);
+    if(r.ok)return r.json();
+    console.error('Fetch failed with status:',r.status,r.statusText);
+  }catch(e){
+    console.error('Failed to load report:',e);
+  }
+  return null;
+}
+loadReport().then(r=>{
+  if(!r){
+    const attemptedUrl=new URL('coverage_report.json',window.location.href).href;
+    const isFileProtocol=window.location.protocol==='file:';
+    document.body.innerHTML=`<p style="padding:40px;color:#f85149">❌ Cannot load coverage_report.json${isFileProtocol?' — CORS blocked':''}
+    <br><small style="color:#888;margin-top:12px;display:block;word-break:break-word;line-height:1.6">
+    ${isFileProtocol?'<strong>⚠️ Browser CORS Security:</strong> Cannot load files via <code>file://</code> protocol.<br>':''}
+    Tried: <code>${attemptedUrl}</code><br>
+    <strong>✅ Local testing:</strong> Run <code>python -m http.server 8000</code> then open <code>http://localhost:8000</code><br>
+    <strong>✅ GitHub Pages:</strong> Works automatically (uses HTTPS)<br>
+    Check browser console (F12) for details.
+    </small></p>`;
+    return;
+  }
+  R=r;
+  renderAll(r);
+});
+
+// ── Modal ──
+function openModal(sd){
+  const b=document.getElementById('modalBox');
+  const ctrl=Object.entries(sd.V||sd.controls||{}).map(([k,v])=>`<code>${k}=${JSON.stringify(v)}</code>`).join(' ');
+  const screenshotSrc=sd.screenshot?new URL(sd.screenshot,window.location.href).href:'';
+  b.innerHTML=`<div class="mh"><h3>State ${(sd.hash||sd.id)} ${sd.isBaseline?'(Baseline σ₀)':''}</h3><button onclick="closeModal()">×</button></div>
+    ${sd.screenshot?`<img src="${screenshotSrc}" alt="State ${sd.hash}"/>`:'<div class="modal-noss">No screenshot. Re-run crawl to capture.</div>'}
+    <div class="si"><div>${ctrl}</div><div style="margin-top:3px">${(sd.D||sd.products||[]).length} products: ${(sd.D||sd.products||[]).join(', ')}</div></div>`;
+  document.getElementById('modalOverlay').classList.add('show');
+}
+function closeModal(e){if(e&&e.target!==document.getElementById('modalOverlay'))return;document.getElementById('modalOverlay').classList.remove('show')}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});
+
+// ── Depth computation ──
+function computeDepths(graph){
+  const fromCounts={};graph.transitions.forEach(t=>{fromCounts[t.from]=(fromCounts[t.from]||0)+1});
+  const bh=Object.entries(fromCounts).sort((a,b)=>b[1]-a[1])[0]?.[0]||graph.states[0]?.hash;
+  const adj={};graph.transitions.forEach(t=>{if(t.from!==t.to){(adj[t.from]=adj[t.from]||[]).push(t.to)}});
+  const dm={};dm[bh]=0;const q=[bh];
+  while(q.length){const c=q.shift();for(const n of(adj[c]||[]))if(dm[n]===undefined){dm[n]=dm[c]+1;q.push(n)}}
+  // Assign depth 0 to any unconnected
+  graph.states.forEach(s=>{if(dm[s.hash]===undefined)dm[s.hash]=0});
+  return {depthMap:dm,baselineHash:bh};
+}
+
+// ── Summary ──
+function renderSummary(r){
+  const s=r.summary;const sh=s.sharedStates||countShared(r);const depth=r.meta?.maxDepth||'?';const tMax=r.meta?.theoreticalMaxStates||'?';
+  const hv=r.mrSeViolations?.length>0&&r.mrSeViolations[0].violation;
+  const cards=[
+    {v:s.totalControls,l:'Controls |C|',c:''},
+    {v:s.dm.statesReached,l:`DM States (d≤${depth})`,c:'dm-c'},
+    {v:s.nl.statesReached,l:'NL States',c:'nl-c'},
+    {v:sh,l:'Shared',c:'sh-c'},
+    {v:(s.nl.covNL*100).toFixed(0)+'%',l:'Cov_NL',c:'nl-c'},
+    {v:tMax,l:'Theoretical Max',c:''},
+    {v:hv?'1':'0',l:'MR_SE Violations',c:hv?'vio-c':'sh-c'},
+  ];
+  document.getElementById('summaryBar').innerHTML=cards.map(c=>`<div class="mc"><div class="v ${c.c}">${c.v}</div><div class="l">${c.l}</div></div>`).join('');
+}
+function countShared(r){const dm=new Set(r.dmStateFlowGraph.states.map(s=>s.hash));return r.nlStateFlowGraph.states.filter(s=>dm.has(s.hash)).length}
+
+// ── Depth filter controls ──
+function setupDepthFilter(){
+  const maxD=Math.max(...Object.values(dmDepthMap));
+  const sel1=document.getElementById('dmDepthFrom'),sel2=document.getElementById('dmDepthTo');
+  sel1.innerHTML='';sel2.innerHTML='';
+  for(let d=0;d<=maxD;d++){sel1.innerHTML+=`<option value="${d}">${d}</option>`;sel2.innerHTML+=`<option value="${d}">${d}</option>`}
+  sel2.value=String(Math.min(1,maxD));
+}
+function applyDepthFilter(){
+  const from=parseInt(document.getElementById('dmDepthFrom').value);
+  const to=parseInt(document.getElementById('dmDepthTo').value);
+  currentFilter={from,to};
+  document.getElementById('filterStatus').textContent=`Showing depth ${from}→${to}`;
+  rerenderGraphs();
+}
+function resetDepthFilter(){
+  currentFilter=null;
+  document.getElementById('filterStatus').textContent='';
+  rerenderGraphs();
+}
+function rerenderGraphs(){
+  document.getElementById('dmGraph').innerHTML='';
+  document.getElementById('nlGraph').innerHTML='';
+  renderGraph('dmGraph',R.dmStateFlowGraph,R.nlStateFlowGraph,'#58a6ff','dm',currentFilter);
+  renderGraph('nlGraph',R.nlStateFlowGraph,R.dmStateFlowGraph,'#f78166','nl',null);
+}
+
+// ── Graph rendering ──
+function renderGraph(cid,graph,otherGraph,color,mode,depthFilter){
+  const container=document.getElementById(cid);
+  const W=container.clientWidth||600,H=560;
+  const otherH=new Set(otherGraph.states.map(s=>s.hash));
+  const {depthMap,baselineHash}=mode==='dm'?{depthMap:dmDepthMap,baselineHash:Object.entries(dmDepthMap).find(([,d])=>d===0)?.[0]}:{depthMap:nlDepthMap,baselineHash:Object.entries(nlDepthMap).find(([,d])=>d===0)?.[0]};
+
+  // Filter states by depth if filter active
+  let filteredHashes=null;
+  if(depthFilter){
+    filteredHashes=new Set();
+    // Include states at the "from" depth (as context/source) and "to" depth (as targets)
+    graph.states.forEach(s=>{
+      const d=depthMap[s.hash]??0;
+      if(d>=depthFilter.from&&d<=depthFilter.to) filteredHashes.add(s.hash);
+    });
+  }
+
+  const stateData={};graph.states.forEach(s=>{stateData[s.hash]=s});
+  const states=filteredHashes?graph.states.filter(s=>filteredHashes.has(s.hash)):graph.states;
+  const stateSet=new Set(states.map(s=>s.hash));
+
+  // Filter transitions
+  const transitions=graph.transitions.filter(t=>t.from!==t.to&&stateSet.has(t.from)&&stateSet.has(t.to));
+
+  // Stats
+  const badge=document.getElementById(mode+'Stats');
+  if(badge) badge.textContent=`${states.length} nodes · ${transitions.length} edges`;
+
+  const maxD=Math.max(...states.map(s=>depthMap[s.hash]??0),1);
+  const nodes=states.map(s=>({
+    id:s.hash,sh:s.hash.slice(0,6),pc:s.D.length,products:s.D,controls:s.V,
+    screenshot:s.screenshot||null,isBase:s.hash===baselineHash,isShared:otherH.has(s.hash),
+    depth:depthMap[s.hash]??0
+  }));
+
+  const linkLabels={};const links=[];
+  transitions.forEach(t=>{
+    const k=t.from+'->'+t.to;
+    if(linkLabels[k])linkLabels[k].push(shortAct(t.action));
+    else{linkLabels[k]=[shortAct(t.action)];links.push({source:t.from,target:t.to,key:k})}
+  });
+
+  const svg=d3.select('#'+cid).append('svg').attr('width',W).attr('height',H);
+  svg.append('defs').append('marker').attr('id',`a-${cid}`).attr('viewBox','0 -5 10 10')
+    .attr('refX',22).attr('refY',0).attr('markerWidth',5).attr('markerHeight',5)
+    .attr('orient','auto').append('path').attr('d','M0,-4L10,0L0,4').attr('fill',color).attr('opacity',.5);
+
+  const cx=W/2,cy=H/2;
+  const sim=d3.forceSimulation(nodes)
+    .force('link',d3.forceLink(links).id(d=>d.id).distance(nodes.length>50?60:nodes.length>20?100:140))
+    .force('charge',d3.forceManyBody().strength(nodes.length>50?-80:nodes.length>20?-200:-400))
+    .force('center',d3.forceCenter(cx,cy))
+    .force('collision',d3.forceCollide(nodes.length>50?12:20))
+    .force('radial',d3.forceRadial(d=>(d.depth/maxD)*Math.min(W,H)*.4,cx,cy).strength(.35));
+
+  const lG=svg.append('g');
+  const lEls=lG.selectAll('path').data(links).join('path').attr('class','link').attr('stroke',color).attr('marker-end',`url(#a-${cid})`);
+
+  // Only show labels if <80 edges
+  let lLabels=null;
+  if(links.length<80){
+    lLabels=lG.selectAll('text').data(links).join('text').attr('class','link-label')
+      .text(d=>{const l=linkLabels[d.key];return l.length<=2?l.join(', '):l[0]+` +${l.length-1}`});
+  }
+
+  const nG=svg.append('g');
+  const nEls=nG.selectAll('g').data(nodes).join('g').attr('class','node')
+    .call(d3.drag().on('start',(e,d)=>{if(!e.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y})
+      .on('drag',(e,d)=>{d.fx=e.x;d.fy=e.y}).on('end',(e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null}));
+
+  const r=nodes.length>50?10:nodes.length>20?14:18;
+  nEls.append('circle').attr('r',d=>d.isBase?r+4:r)
+    .attr('fill',d=>d.isBase?'#33361a':d.isShared?'#1a2e1a':'#1a1d2e')
+    .attr('stroke',d=>d.isBase?'#ffd700':d.isShared?'#7ee787':color);
+  nEls.append('text').attr('dy',nodes.length>50?0:-2).text(d=>d.sh).attr('font-size',nodes.length>50?'6px':'8px');
+  if(nodes.length<=80) nEls.append('text').attr('class','pc').attr('dy',r>12?8:0).text(d=>d.pc+'p');
+
+  // Click → screenshot
+  nEls.on('click',(e,d)=>{openModal({...stateData[d.id],...d,hash:d.id,isBaseline:d.isBase})});
+
+  const tt=document.getElementById('tooltip');
+  nEls.on('mouseenter',(e,d)=>{
+    tt.innerHTML=`<div class="th">σ ${d.id} ${d.isBase?'(baseline)':''} · d${d.depth} ${d.screenshot?'· 📷':''}
+      </div><div class="tc">${Object.entries(d.controls).map(([k,v])=>`<span>${k}=${JSON.stringify(v)}</span>`).join('')}
+      </div><div class="tp">${d.products.join(', ')}</div>`;
+    tt.classList.add('show');
+  }).on('mousemove',e=>{tt.style.left=(e.clientX+10)+'px';tt.style.top=(e.clientY+10)+'px'})
+    .on('mouseleave',()=>tt.classList.remove('show'));
+
+  sim.on('tick',()=>{
+    nodes.forEach(d=>{d.x=Math.max(20,Math.min(W-20,d.x));d.y=Math.max(20,Math.min(H-20,d.y))});
+    lEls.attr('d',d=>{const dx=d.target.x-d.source.x,dy=d.target.y-d.source.y,dr=Math.sqrt(dx*dx+dy*dy)*1.2;
+      return`M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`});
+    if(lLabels)lLabels.attr('x',d=>(d.source.x+d.target.x)/2).attr('y',d=>(d.source.y+d.target.y)/2-4);
+    nEls.attr('transform',d=>`translate(${d.x},${d.y})`);
+  });
+}
+
+function shortAct(a){if(a.startsWith('NL'))return a.replace(/^NL(-chain\[.*?\])?: "/,'').replace(/"$/,'').slice(0,22);return a.replace(/"/g,'').slice(0,25)}
+
+// ── MR panel ──
+function renderMr(r){
+  if(!r.mrSeViolations?.length)return;const v=r.mrSeViolations[0];
+  document.getElementById('mrPanel').innerHTML=`<div class="mr-panel"><h3>${v.violation?'❌':'✅'} ${v.relation}</h3>
+    <div class="md"><strong>Base:</strong> <code>${v.base}</code> → <code>${v.baseStateHash}</code><br>
+    <strong>Variant:</strong> <code>${v.variant}</code> → <code>${v.variantStateHash}</code><br>${v.detail}</div></div>`;
+}
+
+// ── Chain panel ──
+function renderChains(r){
+  if(!r.nlChainResults?.length)return;
+  let h='<div class="chain-panel"><h3>NL Refinement Chains (Multi-turn Depth)</h3>';
+  for(const c of r.nlChainResults){
+    h+=`<div class="chain-card"><div class="cc-header"><span>${c.id}</span><span style="color:#888;font-weight:400">${c.description}</span></div><div class="cc-steps">`;
+    for(const s of c.steps){
+      h+=`<div class="chain-step"><span class="cs-num">→${s.step}</span><span class="cs-text">${s.utterance}</span><span class="cs-hash">${s.stateHash}</span><span class="cs-fp">[${s.footprint.join(', ')}]</span></div>`;
+    }
+    h+='</div>';
+    if(c.equivalenceCheck){
+      const eq=c.equivalenceCheck;
+      h+=`<div class="chain-eq ${eq.match?'pass':'fail'}">${eq.match?'✅':'❌'} Chain final <code>${eq.chainFinalHash}</code> vs single-shot <code>${eq.equivalentHash}</code> → <strong>${eq.match?'MATCH':'MISMATCH'}</strong> — "${eq.equivalent}"</div>`;
+    }
+    h+='</div>';
+  }
+  h+='</div>';
+  document.getElementById('chainPanel').innerHTML=h;
+}
+
+// ── Footprints ──
+function renderFp(r){
+  if(!r.nlControlFootprints)return;
+  const rows=r.nlControlFootprints.map(fp=>`<tr><td>${fp.utterance}</td><td style="color:#ccc">${fp.text}</td><td>${fp.footprint.length?fp.footprint.map(c=>`<span class="fp-tag">${c}</span>`).join(''):'<span style="color:#555;font-style:italic">none</span>'}</td></tr>`).join('');
+  document.getElementById('fpSection').innerHTML=`<h3>NL Control Footprints — fp(u, σ)</h3><table class="fp-table"><thead><tr><th>ID</th><th>Utterance</th><th>Controls</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// ── Export helpers ──
+function downloadDot(mode){
+  const g=mode==='dm'?R.dmStateFlowGraph:R.nlStateFlowGraph;
+  const dm2=mode==='dm'?dmDepthMap:nlDepthMap;
+  const bh=Object.entries(dm2).find(([,d])=>d===0)?.[0]||g.states[0]?.hash;
+  const dot=buildDot(mode==='dm'?'DM':'NL',g,dm2,bh);
+  dl(dot,`${mode}_graph.dot`,'text/plain');
+}
+function buildDot(label,graph,depthMap,bh){
+  const L=[`digraph "${label}" {`,'rankdir=LR;','node [shape=circle,style=filled,fontsize=8,fontname="Courier"];','edge [fontsize=7,fontname="Courier"];'];
+  const bd={};graph.states.forEach(s=>{const d=depthMap[s.hash]??0;(bd[d]=bd[d]||[]).push(s)});
+  for(const[d,sts]of Object.entries(bd).sort((a,b)=>a[0]-b[0])){
+    L.push(`subgraph cluster_d${d} { rank=same; label="depth ${d}"; style=dashed;`);
+    for(const s of sts){const c=s.hash===bh?'#ffd700':'#58a6ff';L.push(`"${s.hash}" [label="${s.hash.slice(0,6)}\\n${s.D.length}p",fillcolor="${c}40",color="${c}"];`)}
+    L.push('}');
+  }
+  const em={};graph.transitions.forEach(t=>{if(t.from===t.to)return;const k=`${t.from}->${t.to}`;(em[k]=em[k]||{f:t.from,t:t.to,a:[]}).a.push(t.action)});
+  for(const e of Object.values(em)){const l=e.a.length<=2?e.a.map(a=>a.replace(/"/g,'\\"').slice(0,28)).join('\\n'):e.a[0].replace(/"/g,'\\"').slice(0,25)+`...\\n+${e.a.length-1}`;L.push(`"${e.f}"->"${e.t}" [label="${l}"];`)}
+  L.push('}');return L.join('\n');
+}
+function downloadJson(){dl(JSON.stringify(R,null,2),'coverage_report.json','application/json')}
+function exportSvg(mode){
+  const el=document.querySelector(`#${mode}Graph svg`);if(!el)return;
+  dl(new XMLSerializer().serializeToString(el),`${mode}_graph.svg`,'image/svg+xml');
+}
+function dl(content,name,type){const b=new Blob([content],{type});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=name;a.click();URL.revokeObjectURL(u)}
+
+// ── renderAll ──
+function renderAll(r){
+  const dm=computeDepths(r.dmStateFlowGraph);dmDepthMap=dm.depthMap;
+  const nl=computeDepths(r.nlStateFlowGraph);nlDepthMap=nl.depthMap;
+  renderSummary(r);setupDepthFilter();
+  renderGraph('dmGraph',r.dmStateFlowGraph,r.nlStateFlowGraph,'#58a6ff','dm',null);
+  renderGraph('nlGraph',r.nlStateFlowGraph,r.dmStateFlowGraph,'#f78166','nl',null);
+  renderMr(r);renderChains(r);renderFp(r);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PRINT VIEW
+// ══════════════════════════════════════════════════════════════════════════════
+function renderPrint(r){
+  const pv=document.getElementById('printView');if(pv.dataset.done)return;pv.dataset.done='1';
+  const s=r.summary;const sh=s.sharedStates||countShared(r);const hv=r.mrSeViolations?.length>0&&r.mrSeViolations[0].violation;
+  const depth=r.meta?.maxDepth||'?';const tMax=r.meta?.theoreticalMaxStates||'?';
+
+  let h=`<h1>State-Event Flow Graph: DM vs NL Reachability</h1>
+    <div class="ps">Generated ${r.meta?.timestamp?new Date(r.meta.timestamp).toLocaleDateString():''} · ${r.meta?.appUrl||''} · depth=${depth} · theoretical max states=${tMax}</div>
+    <div class="pg">
+      <div class="pm"><div class="pv">${s.totalControls}</div><div class="pl">Controls</div></div>
+      <div class="pm"><div class="pv dm">${s.dm.statesReached}</div><div class="pl">DM States</div></div>
+      <div class="pm"><div class="pv nl">${s.nl.statesReached}</div><div class="pl">NL States</div></div>
+      <div class="pm"><div class="pv sh">${sh}</div><div class="pl">Shared</div></div>
+      <div class="pm"><div class="pv nl">${(s.nl.covNL*100).toFixed(0)}%</div><div class="pl">Cov_NL</div></div>
+      <div class="pm"><div class="pv">${tMax}</div><div class="pl">Max Possible</div></div>
+    </div>`;
+
+  // Print graphs — show depth 0→1 slice for DM (readable) + full NL
+  h+=`<h2>State-Event Flow Graphs</h2>
+    <p style="font-size:9px;color:#888;margin-bottom:8px">DM graph shows depth 0→1 layer (${Object.values(dmDepthMap).filter(d=>d<=1).length} of ${r.dmStateFlowGraph.states.length} states). Full graph exported as .dot / .svg.</p>
+    <div class="pgr"><div class="pgb"><h3>DM — depth 0→1 (${Object.values(dmDepthMap).filter(d=>d<=1).length} states)</h3><div id="dmPG"></div></div>
+    <div class="pgb"><h3>NL — all states (${r.nlStateFlowGraph.states.length} states)</h3><div id="nlPG"></div></div></div>`;
+
+  // MR_SE
+  if(hv){const v=r.mrSeViolations[0];h+=`<div class="pvi"><h3>❌ ${v.relation}</h3><p><strong>Base:</strong> <code>${v.base}</code> → <code>${v.baseStateHash}</code><br><strong>Variant:</strong> <code>${v.variant}</code> → <code>${v.variantStateHash}</code><br>${v.detail}</p></div>`}
+
+  // Chains
+  if(r.nlChainResults?.length){
+    h+=`<h2>NL Refinement Chains (Conversational Depth)</h2>`;
+    for(const c of r.nlChainResults){
+      h+=`<div class="pch"><div class="pch-h"><span>${c.id}</span><span style="font-weight:400;color:#888">${c.description}</span></div><div class="pch-s">`;
+      for(const st of c.steps) h+=`<div class="pch-step">→${st.step} "${st.utterance}" → <code>${st.stateHash}</code> [${st.footprint.join(', ')}] (${st.productCount}p)</div>`;
+      h+='</div>';
+      if(c.equivalenceCheck){const eq=c.equivalenceCheck;h+=`<div class="pch-eq ${eq.match?'pass':'fail'}">${eq.match?'✅':'❌'} vs "${eq.equivalent}" → ${eq.match?'MATCH':'MISMATCH'}</div>`}
+      h+='</div>';
+    }
+  }
+
+  // Footprints
+  h+='<h2>NL Control Footprints</h2><table><thead><tr><th>ID</th><th>Utterance</th><th>Controls</th></tr></thead><tbody>';
+  for(const fp of r.nlControlFootprints){h+=`<tr><td><code>${fp.utterance}</code></td><td>${fp.text}</td><td>${fp.footprint.length?fp.footprint.map(c=>`<span class="pt">${c}</span>`).join(' '):'<em>none</em>'}</td></tr>`}
+  h+='</tbody></table>';
+
+  // State count by depth
+  const dmByD={},nlByD={};
+  r.dmStateFlowGraph.states.forEach(s=>{const d=dmDepthMap[s.hash]??0;dmByD[d]=(dmByD[d]||0)+1});
+  r.nlStateFlowGraph.states.forEach(s=>{const d=nlDepthMap[s.hash]??0;nlByD[d]=(nlByD[d]||0)+1});
+  h+='<h2>States by Depth Layer</h2><table><thead><tr><th>Depth</th><th>DM States</th><th>NL States</th><th>DM Cumulative</th></tr></thead><tbody>';
+  let cum=0;
+  for(let d=0;d<=Math.max(...Object.keys(dmByD).map(Number));d++){
+    cum+=(dmByD[d]||0);
+    h+=`<tr><td>${d}</td><td>${dmByD[d]||0}</td><td>${nlByD[d]||0}</td><td>${cum}</td></tr>`;
+  }
+  h+='</tbody></table>';
+
+  pv.innerHTML=h;
+
+  // Render print graphs (static, depth-filtered for DM)
+  renderPrintGraph('dmPG',r.dmStateFlowGraph,r.nlStateFlowGraph,'#2563eb','dm',{from:0,to:1});
+  renderPrintGraph('nlPG',r.nlStateFlowGraph,r.dmStateFlowGraph,'#dc6027','nl',null);
+}
+
+function renderPrintGraph(cid,graph,other,color,mode,depthFilter){
+  const C=document.getElementById(cid);const W=C.clientWidth||480,H=360;
+  const oH=new Set(other.states.map(s=>s.hash));
+  const dm=mode==='dm'?dmDepthMap:nlDepthMap;
+  const bh=Object.entries(dm).find(([,d])=>d===0)?.[0]||graph.states[0]?.hash;
+
+  let states=graph.states;
+  if(depthFilter){const fh=new Set();graph.states.forEach(s=>{const d=dm[s.hash]??0;if(d>=depthFilter.from&&d<=depthFilter.to)fh.add(s.hash)});states=graph.states.filter(s=>fh.has(s.hash))}
+  const ss=new Set(states.map(s=>s.hash));
+  const trans=graph.transitions.filter(t=>t.from!==t.to&&ss.has(t.from)&&ss.has(t.to));
+
+  const maxD=Math.max(...states.map(s=>dm[s.hash]??0),1);
+  const nodes=states.map(s=>({id:s.hash,sh:s.hash.slice(0,6),pc:s.D.length,isBase:s.hash===bh,isShared:oH.has(s.hash),depth:dm[s.hash]??0}));
+  const ll={};const links=[];
+  trans.forEach(t=>{const k=t.from+'->'+t.to;if(ll[k])ll[k].push(shortAct(t.action));else{ll[k]=[shortAct(t.action)];links.push({source:t.from,target:t.to,key:k})}});
+
+  const svg=d3.select('#'+cid).append('svg').attr('width',W).attr('height',H);
+  svg.append('defs').append('marker').attr('id',`pa-${cid}`).attr('viewBox','0 -5 10 10')
+    .attr('refX',18).attr('refY',0).attr('markerWidth',4).attr('markerHeight',4)
+    .attr('orient','auto').append('path').attr('d','M0,-4L10,0L0,4').attr('fill',color).attr('opacity',.4);
+
+  const cx=W/2,cy=H/2,nr=nodes.length>30?8:12;
+  const sim=d3.forceSimulation(nodes)
+    .force('link',d3.forceLink(links).id(d=>d.id).distance(nodes.length>30?40:70))
+    .force('charge',d3.forceManyBody().strength(nodes.length>30?-40:-150))
+    .force('center',d3.forceCenter(cx,cy))
+    .force('collision',d3.forceCollide(nodes.length>30?8:14))
+    .force('radial',d3.forceRadial(d=>(d.depth/maxD)*Math.min(W,H)*.35,cx,cy).strength(.4))
+    .stop();
+  for(let i=0;i<250;i++)sim.tick();
+  nodes.forEach(d=>{d.x=Math.max(16,Math.min(W-16,d.x));d.y=Math.max(16,Math.min(H-16,d.y))});
+
+  svg.append('g').selectAll('path').data(links).join('path')
+    .attr('fill','none').attr('stroke',color).attr('stroke-width',1).attr('opacity',.3)
+    .attr('marker-end',`url(#pa-${cid})`)
+    .attr('d',d=>{const dx=d.target.x-d.source.x,dy=d.target.y-d.source.y,dr=Math.sqrt(dx*dx+dy*dy)*1.2;return`M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`});
+  if(links.length<50){
+    svg.append('g').selectAll('text').data(links).join('text')
+      .attr('font-size','5.5px').attr('font-family','monospace').attr('fill','#999')
+      .attr('x',d=>(d.source.x+d.target.x)/2).attr('y',d=>(d.source.y+d.target.y)/2-3)
+      .text(d=>{const l=ll[d.key];return l.length<=2?l.join(', '):l[0]+` +${l.length-1}`});
+  }
+  const ng=svg.append('g').selectAll('g').data(nodes).join('g').attr('transform',d=>`translate(${d.x},${d.y})`);
+  ng.append('circle').attr('r',d=>d.isBase?nr+3:nr)
+    .attr('fill',d=>d.isBase?'#fefce8':d.isShared?'#f0fdf4':'#f8fafc')
+    .attr('stroke',d=>d.isBase?'#ca8a04':d.isShared?'#16a34a':color).attr('stroke-width',1.5);
+  ng.append('text').attr('dy',-1).attr('text-anchor','middle').attr('font-size',nr>10?'7px':'5.5px')
+    .attr('font-family','monospace').attr('fill','#333').text(d=>d.sh);
+  if(nodes.length<=40) ng.append('text').attr('dy',nr>10?8:5).attr('text-anchor','middle').attr('font-size',nr>10?'6px':'4.5px').attr('fill','#888').text(d=>d.pc+'p');
+}
+</script>
+</body>
+</html>
